@@ -1,0 +1,1834 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nusa Kamera Service - Sistem Manajemen Service</title>
+    
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Font Awesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Google Fonts Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <!-- React & ReactDOM CDN -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    
+    <!-- Babel Standalone for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f8fafc;
+        }
+        @media print {
+            .no-print {
+                display: none !important;
+            }
+            .print-only {
+                display: block !important;
+            }
+            body {
+                background: white !important;
+            }
+        }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800 antialiased min-h-screen">
+    <div id="root"></div>
+
+    <!-- Firebase SDK Imports -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Firebase Config setup using environment fallback
+        const firebaseConfig = typeof __firebase_config !== 'undefined' 
+            ? JSON.parse(__firebase_config) 
+            : {
+                apiKey: "AIzaSyDemoKeyOnly",
+                authDomain: "nusa-kamera-service.firebaseapp.com",
+                projectId: "nusa-kamera-service",
+                storageBucket: "nusa-kamera-service.appspot.com",
+                messagingSenderId: "123456789",
+                appId: "1:123456789:web:abcdef"
+            };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'nusa-kamera-default';
+
+        // Make Firebase helpers globally accessible for React component
+        window.firebaseDb = db;
+        window.firebaseAuth = auth;
+        window.firebaseAppId = appId;
+        window.firebaseModules = {
+            signInAnonymously,
+            signInWithCustomToken,
+            onAuthStateChanged,
+            collection,
+            doc,
+            setDoc,
+            onSnapshot,
+            updateDoc
+        };
+
+        // Notify React when Firebase is initialized
+        window.dispatchEvent(new Event('firebase-ready'));
+    </script>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        // Configuration & Master Data
+        const STAGES = [
+            'On Check', 
+            'Price Confirmation', 
+            'Price Approved', 
+            'Waiting Sparepart', 
+            'On Progress', 
+            'Done', 
+            'Trouble', 
+            'Cancel'
+        ];
+
+        const STORES = ['Cipadung', 'Buahbatu', 'Dipatiukur'];
+
+        const BRANCH_PHONES = {
+            'Cipadung': '089670897089',
+            'Dipatiukur': '089610891089',
+            'Buahbatu': '089630893089'
+        };
+
+        const TECHNICIANS = ['Windhu Service', 'A Agung', 'Kang Arif', 'Kang Dally'];
+
+        const PAYMENT_METHODS = ['Tunai / Cash', 'Transfer BCA', 'Transfer Mandiri', 'QRIS', 'Debit Card'];
+
+        // Sample Mock Initial Data
+        const INITIAL_TRANSACTIONS = [
+            {
+                id: 'NKS-2401',
+                employeeName: 'Budi Kurnia',
+                storeLocation: 'Cipadung',
+                entryDate: '2026-03-01',
+                completionDate: '2026-03-02',
+                customerName: 'Ahmad Dahlan',
+                customerWA: '081234567890',
+                itemType: 'Sony A7 III Body',
+                serialNumber: 'SN-9081234',
+                accessories: 'Baterai, Strap, Body Cap',
+                damage: 'Sensor kotor, Error Shutter 20',
+                costEstimate: 750000,
+                fixPrice: 750000,
+                isPaid: true,
+                paymentType: 'FULL',
+                paidAmount: 750000,
+                paymentMethod: 'Transfer BCA',
+                paymentNote: 'Lunas saat penyerahan unit',
+                sparepartCost: 250000,
+                sparepartPaid: true,
+                technicianCost: 150000,
+                technicianPaid: true,
+                status: 'Done',
+                assignedTechnician: 'Windhu Service',
+                pickedUp: true,
+                pickupDate: '2026-03-02 14:20',
+                statusHistory: {
+                    'On Check': '2026-03-01 09:00',
+                    'Price Confirmation': '2026-03-01 10:30',
+                    'Price Approved': '2026-03-01 11:00',
+                    'On Progress': '2026-03-01 13:00',
+                    'Done': '2026-03-02 10:00'
+                },
+                notes: [
+                    { id: 1, text: 'Customer butuh cepat untuk pengawasan event', time: '2026-03-01 09:05', author: 'Budi' }
+                ]
+            }
+        ];
+
+        // Format Currency Helper
+        const formatRupiah = (number) => {
+            return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(number || 0);
+        };
+
+        // Main Application Component
+        function App() {
+            const [activeTab, setActiveTab] = useState('dashboard');
+            const [isFinanceUnlocked, setIsFinanceUnlocked] = useState(false);
+            const [tabPinInput, setTabPinInput] = useState('');
+            const [tabPinError, setTabPinError] = useState('');
+
+            const [transactions, setTransactions] = useState([]);
+            const [withdrawals, setWithdrawals] = useState([]);
+            const [isOnlineSync, setIsOnlineSync] = useState(false);
+            const [authUser, setAuthUser] = useState(null);
+
+            // Filters
+            const [selectedStore, setSelectedStore] = useState('ALL');
+            const [searchQuery, setSearchQuery] = useState('');
+            const [dateFilterStart, setDateFilterStart] = useState('');
+            const [dateFilterEnd, setDateFilterEnd] = useState('');
+            const [selectedMonth, setSelectedMonth] = useState('');
+
+            // Modals
+            const [detailModalTx, setDetailModalTx] = useState(null);
+            const [priceModalTx, setPriceModalTx] = useState(null);
+            const [invoiceModalTx, setInvoiceModalTx] = useState(null);
+            const [pinModalOpen, setPinModalOpen] = useState(false);
+            const [pinInput, setPinInput] = useState('');
+            const [withdrawAmount, setWithdrawAmount] = useState('');
+            const [withdrawNote, setWithdrawNote] = useState('');
+
+            // Form Input Data
+            const [formData, setFormData] = useState({
+                employeeName: '',
+                storeLocation: 'Cipadung',
+                entryDate: new Date().toISOString().split('T')[0],
+                customerName: '',
+                customerWA: '',
+                itemType: '',
+                serialNumber: '',
+                accessories: '',
+                damage: '',
+                costEstimate: '',
+                estimatedDays: '3 Hari'
+            });
+
+            // Notifications
+            const [toastMessage, setToastMessage] = useState('');
+
+            const showToast = (msg) => {
+                setToastMessage(msg);
+                setTimeout(() => setToastMessage(''), 3000);
+            };
+
+            // Setup Real-time Firebase Online Database Sync
+            useEffect(() => {
+                const initFirebaseSync = async () => {
+                    if (!window.firebaseDb || !window.firebaseModules) return;
+
+                    const { signInAnonymously, signInWithCustomToken, onAuthStateChanged, collection, doc, onSnapshot, setDoc } = window.firebaseModules;
+                    const db = window.firebaseDb;
+                    const auth = window.firebaseAuth;
+                    const appId = window.firebaseAppId;
+
+                    // 1. Authenticate user
+                    try {
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                            await signInWithCustomToken(auth, __initial_auth_token);
+                        } else {
+                            await signInAnonymously(auth);
+                        }
+                    } catch (e) {
+                        console.warn("Auth fallback to local mode:", e);
+                    }
+
+                    onAuthStateChanged(auth, (user) => {
+                        if (user) {
+                            setAuthUser(user);
+                            setIsOnlineSync(true);
+
+                            // 2. Real-time Listener for Public Service Transactions
+                            const txCollectionRef = collection(db, 'artifacts', appId, 'public', 'data', 'transactions');
+                            onSnapshot(txCollectionRef, (snapshot) => {
+                                const docsData = snapshot.docs.map(docSnap => docSnap.data());
+                                if (docsData.length > 0) {
+                                    setTransactions(docsData);
+                                } else {
+                                    // Seed initial mock data if remote database is empty
+                                    INITIAL_TRANSACTIONS.forEach(item => {
+                                        setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'transactions', item.id), item);
+                                    });
+                                    setTransactions(INITIAL_TRANSACTIONS);
+                                }
+                            }, (err) => {
+                                console.error("Snapshot error:", err);
+                            });
+
+                            // 3. Real-time Listener for Profit Withdrawals
+                            const wdCollectionRef = collection(db, 'artifacts', appId, 'public', 'data', 'withdrawals');
+                            onSnapshot(wdCollectionRef, (snapshot) => {
+                                const wdData = snapshot.docs.map(docSnap => docSnap.data());
+                                setWithdrawals(wdData);
+                            }, (err) => {
+                                console.error("Withdrawal snapshot error:", err);
+                            });
+                        }
+                    });
+                };
+
+                initFirebaseSync();
+                window.addEventListener('firebase-ready', initFirebaseSync);
+                return () => window.removeEventListener('firebase-ready', initFirebaseSync);
+            }, []);
+
+            // Helper function to sync a single transaction document
+            const saveTransactionToCloud = async (txData) => {
+                if (window.firebaseDb && window.firebaseModules && authUser) {
+                    const { doc, setDoc } = window.firebaseModules;
+                    const db = window.firebaseDb;
+                    const appId = window.firebaseAppId;
+                    try {
+                        await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'transactions', txData.id), txData);
+                    } catch (err) {
+                        console.error("Failed to save doc to cloud:", err);
+                    }
+                }
+            };
+
+            // New Service Form Submit
+            const handleFormSubmit = async (e) => {
+                e.preventDefault();
+                const newId = 'NKS-' + Math.floor(1000 + Math.random() * 9000);
+                const newTx = {
+                    id: newId,
+                    ...formData,
+                    costEstimate: Number(formData.costEstimate) || 0,
+                    fixPrice: null,
+                    isPaid: false,
+                    paymentType: 'UNPAID',
+                    paidAmount: 0,
+                    paymentMethod: '',
+                    paymentNote: '',
+                    sparepartCost: 0,
+                    sparepartPaid: false,
+                    technicianCost: 0,
+                    technicianPaid: false,
+                    status: 'On Check',
+                    completionDate: '',
+                    assignedTechnician: '',
+                    pickedUp: false,
+                    pickupDate: '',
+                    statusHistory: {
+                        'On Check': new Date().toISOString().replace('T', ' ').substring(0, 16)
+                    },
+                    notes: []
+                };
+
+                setTransactions([newTx, ...transactions]);
+                await saveTransactionToCloud(newTx);
+                showToast(`Transaksi baru ${newId} berhasil ditambahkan!`);
+                
+                // Reset Form
+                setFormData({
+                    employeeName: '',
+                    storeLocation: 'Cipadung',
+                    entryDate: new Date().toISOString().split('T')[0],
+                    customerName: '',
+                    customerWA: '',
+                    itemType: '',
+                    serialNumber: '',
+                    accessories: '',
+                    damage: '',
+                    costEstimate: '',
+                    estimatedDays: '3 Hari'
+                });
+                setActiveTab('dashboard');
+            };
+
+            // Update Progress Status
+            const updateStatus = async (txId, newStatus) => {
+                const now = new Date().toISOString().replace('T', ' ').substring(0, 16);
+                const todayDate = new Date().toISOString().split('T')[0];
+
+                const updatedList = transactions.map(tx => {
+                    if (tx.id === txId) {
+                        const isCancelling = newStatus === 'Cancel';
+                        const isDone = newStatus === 'Done';
+                        const updatedTx = {
+                            ...tx,
+                            status: newStatus,
+                            fixPrice: isCancelling ? 0 : tx.fixPrice,
+                            costEstimate: isCancelling ? 0 : tx.costEstimate,
+                            completionDate: (isDone || isCancelling) ? (tx.completionDate || todayDate) : tx.completionDate,
+                            statusHistory: {
+                                ...tx.statusHistory,
+                                [newStatus]: now
+                            }
+                        };
+                        saveTransactionToCloud(updatedTx);
+                        return updatedTx;
+                    }
+                    return tx;
+                });
+
+                setTransactions(updatedList);
+
+                if (detailModalTx && detailModalTx.id === txId) {
+                    setDetailModalTx(prev => ({
+                        ...prev,
+                        status: newStatus,
+                        fixPrice: newStatus === 'Cancel' ? 0 : prev.fixPrice,
+                        costEstimate: newStatus === 'Cancel' ? 0 : prev.costEstimate,
+                        completionDate: (newStatus === 'Done' || newStatus === 'Cancel') ? (prev.completionDate || todayDate) : prev.completionDate,
+                        statusHistory: {
+                            ...prev.statusHistory,
+                            [newStatus]: now
+                        }
+                    }));
+                }
+                showToast(`Status transaksi diperbarui ke: ${newStatus}`);
+            };
+
+            // Update Technician Handler
+            const updateTechnician = async (txId, techName) => {
+                const updatedList = transactions.map(tx => {
+                    if (tx.id === txId) {
+                        const updatedTx = { ...tx, assignedTechnician: techName };
+                        saveTransactionToCloud(updatedTx);
+                        return updatedTx;
+                    }
+                    return tx;
+                });
+
+                setTransactions(updatedList);
+
+                if (detailModalTx && detailModalTx.id === txId) {
+                    setDetailModalTx(prev => ({ ...prev, assignedTechnician: techName }));
+                }
+                showToast(`Teknisi diperbarui: ${techName || 'Belum Ditentukan'}`);
+            };
+
+            // Save Notes Data
+            const saveNotesData = async (txId, updatedNotes) => {
+                const updatedList = transactions.map(tx => {
+                    if (tx.id === txId) {
+                        const updatedTx = { ...tx, notes: updatedNotes };
+                        saveTransactionToCloud(updatedTx);
+                        return updatedTx;
+                    }
+                    return tx;
+                });
+                setTransactions(updatedList);
+            };
+
+            // Save Finance Data
+            const saveFinanceData = async (txId, financeData) => {
+                const updatedList = transactions.map(tx => {
+                    if (tx.id === txId) {
+                        const updatedTx = { ...tx, ...financeData };
+                        saveTransactionToCloud(updatedTx);
+                        return updatedTx;
+                    }
+                    return tx;
+                });
+                setTransactions(updatedList);
+                setPriceModalTx(null);
+                showToast('Data keuangan & pembayaran berhasil diperbarui');
+            };
+
+            // Toggle Unit Picked Up Status
+            const togglePickup = async (txId) => {
+                const now = new Date().toISOString().replace('T', ' ').substring(0, 16);
+                const updatedList = transactions.map(tx => {
+                    if (tx.id === txId) {
+                        const newPickupState = !tx.pickedUp;
+                        const updatedTx = {
+                            ...tx,
+                            pickedUp: newPickupState,
+                            pickupDate: newPickupState ? now : ''
+                        };
+                        saveTransactionToCloud(updatedTx);
+                        return updatedTx;
+                    }
+                    return tx;
+                });
+                setTransactions(updatedList);
+                showToast('Status pengambilan unit telah diperbarui');
+            };
+
+            // Filter Logic
+            const filteredTransactions = useMemo(() => {
+                return transactions.filter(tx => {
+                    if (selectedStore !== 'ALL' && tx.storeLocation !== selectedStore) return false;
+
+                    if (searchQuery.trim() !== '') {
+                        const q = searchQuery.toLowerCase();
+                        const match = (tx.id && tx.id.toLowerCase().includes(q)) ||
+                                      (tx.customerName && tx.customerName.toLowerCase().includes(q)) ||
+                                      (tx.customerWA && tx.customerWA.includes(q)) ||
+                                      (tx.itemType && tx.itemType.toLowerCase().includes(q)) ||
+                                      (tx.serialNumber && tx.serialNumber.toLowerCase().includes(q));
+                        if (!match) return false;
+                    }
+
+                    if (dateFilterStart && tx.entryDate < dateFilterStart) return false;
+                    if (dateFilterEnd && tx.entryDate > dateFilterEnd) return false;
+
+                    if (selectedMonth && !tx.entryDate.startsWith(selectedMonth)) return false;
+
+                    return true;
+                });
+            }, [transactions, selectedStore, searchQuery, dateFilterStart, dateFilterEnd, selectedMonth]);
+
+            // Summary Financial Metrics
+            const metrics = useMemo(() => {
+                let totalIncomeCashIn = 0;
+                let totalReceivables = 0;
+                let totalSparepartCost = 0;
+                let totalTechnicianCost = 0;
+
+                filteredTransactions.forEach(tx => {
+                    const finalPrice = tx.fixPrice !== null && tx.fixPrice !== undefined ? tx.fixPrice : tx.costEstimate;
+                    const paid = tx.paidAmount || 0;
+                    
+                    totalIncomeCashIn += paid;
+                    
+                    if (finalPrice > paid) {
+                        totalReceivables += (finalPrice - paid);
+                    }
+
+                    if (tx.sparepartPaid) {
+                        totalSparepartCost += (tx.sparepartCost || 0);
+                    }
+                    if (tx.technicianPaid) {
+                        totalTechnicianCost += (tx.technicianCost || 0);
+                    }
+                });
+
+                const grossProfit = totalIncomeCashIn - (totalSparepartCost + totalTechnicianCost);
+                const totalWithdrawn = withdrawals.reduce((acc, curr) => acc + (curr.amount || 0), 0);
+                const netProfit = grossProfit - totalWithdrawn;
+
+                return {
+                    totalIncomeCashIn,
+                    totalReceivables,
+                    totalSparepartCost,
+                    totalTechnicianCost,
+                    grossProfit,
+                    totalWithdrawn,
+                    netProfit
+                };
+            }, [filteredTransactions, withdrawals]);
+
+            // Handle Profit Withdrawal
+            const handleWithdrawProfit = async () => {
+                if (pinInput !== '203646') {
+                    alert('PIN Keamanan Salah! Akses Ditolak.');
+                    return;
+                }
+                const amt = Number(withdrawAmount);
+                if (!amt || amt <= 0) {
+                    alert('Masukkan jumlah penarikan yang valid!');
+                    return;
+                }
+                if (amt > metrics.netProfit) {
+                    alert('Jumlah penarikan melebihi Laba Bersih yang tersedia!');
+                    return;
+                }
+
+                const newWithdrawal = {
+                    id: 'WD-' + Date.now(),
+                    date: new Date().toISOString().replace('T', ' ').substring(0, 16),
+                    amount: amt,
+                    note: withdrawNote || 'Penarikan Laba'
+                };
+
+                setWithdrawals([newWithdrawal, ...withdrawals]);
+
+                if (window.firebaseDb && window.firebaseModules && authUser) {
+                    const { doc, setDoc } = window.firebaseModules;
+                    const db = window.firebaseDb;
+                    const appId = window.firebaseAppId;
+                    try {
+                        await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'withdrawals', newWithdrawal.id), newWithdrawal);
+                    } catch(err) {
+                        console.error("Cloud save error for withdrawal:", err);
+                    }
+                }
+
+                setPinModalOpen(false);
+                setPinInput('');
+                setWithdrawAmount('');
+                setWithdrawNote('');
+                showToast('Penarikan Laba Bersih berhasil dicatat!');
+            };
+
+            return (
+                <div className="min-h-screen flex flex-col pb-12">
+                    {/* Header Banner */}
+                    <header className="bg-gradient-to-r from-orange-600 to-amber-600 text-white shadow-lg no-print">
+                        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex flex-col md:flex-row justify-between items-center space-y-4 md:space-y-0">
+                            <div className="flex items-center space-x-3">
+                                <div className="bg-white p-2 rounded-xl text-orange-600 shadow-inner">
+                                    <i className="fa-solid fa-camera-retro text-2xl"></i>
+                                </div>
+                                <div>
+                                    <div className="flex items-center space-x-2">
+                                        <h1 className="text-xl sm:text-2xl font-extrabold tracking-tight">Nusa Kamera Service</h1>
+                                        {isOnlineSync && (
+                                            <span className="bg-emerald-500 text-white text-[10px] font-extrabold px-2 py-0.5 rounded-full flex items-center space-x-1 animate-pulse">
+                                                <i className="fa-solid fa-wifi"></i>
+                                                <span>DATABASE ONLINE</span>
+                                            </span>
+                                        )}
+                                    </div>
+                                    <p className="text-xs text-orange-100 font-medium">Sistem Monitoring & Invoice Service 3 Cabang Real-Time</p>
+                                </div>
+                            </div>
+
+                            {/* Store Location Tabs */}
+                            <div className="flex bg-orange-700/60 p-1 rounded-xl text-xs font-semibold backdrop-blur-sm">
+                                <button 
+                                    onClick={() => setSelectedStore('ALL')}
+                                    className={`px-3 py-1.5 rounded-lg transition-all ${selectedStore === 'ALL' ? 'bg-white text-orange-700 shadow-md' : 'text-orange-100 hover:text-white'}`}
+                                >
+                                    Semua Cabang
+                                </button>
+                                {STORES.map(store => (
+                                    <button 
+                                        key={store}
+                                        onClick={() => setSelectedStore(store)}
+                                        className={`px-3 py-1.5 rounded-lg transition-all ${selectedStore === store ? 'bg-white text-orange-700 shadow-md' : 'text-orange-100 hover:text-white'}`}
+                                    >
+                                        Cb. {store}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    </header>
+
+                    {/* Navigation Bar */}
+                    <nav className="bg-white border-b border-slate-200 sticky top-0 z-20 shadow-sm no-print">
+                        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex space-x-2 sm:space-x-8">
+                            <button
+                                onClick={() => setActiveTab('dashboard')}
+                                className={`py-3.5 px-3 border-b-2 font-bold text-xs sm:text-sm flex items-center space-x-2 transition-all ${activeTab === 'dashboard' ? 'border-orange-600 text-orange-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+                            >
+                                <i className="fa-solid fa-chart-line"></i>
+                                <span>Dashboard & Servis</span>
+                            </button>
+                            <button
+                                onClick={() => setActiveTab('input')}
+                                className={`py-3.5 px-3 border-b-2 font-bold text-xs sm:text-sm flex items-center space-x-2 transition-all ${activeTab === 'input' ? 'border-orange-600 text-orange-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+                            >
+                                <i className="fa-solid fa-circle-plus"></i>
+                                <span>Input Servis Baru</span>
+                            </button>
+                            <button
+                                onClick={() => {
+                                    if (!isFinanceUnlocked) {
+                                        setTabPinInput('');
+                                        setTabPinError('');
+                                    }
+                                    setActiveTab('finance');
+                                }}
+                                className={`py-3.5 px-3 border-b-2 font-bold text-xs sm:text-sm flex items-center space-x-2 transition-all ${activeTab === 'finance' ? 'border-orange-600 text-orange-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+                            >
+                                <i className="fa-solid fa-wallet"></i>
+                                <span>Laporan Keuangan</span>
+                                {!isFinanceUnlocked && <i className="fa-solid fa-lock text-xs text-orange-500 ml-1"></i>}
+                            </button>
+                        </div>
+                    </nav>
+
+                    {/* Toast Notification */}
+                    {toastMessage && (
+                        <div className="fixed bottom-5 right-5 bg-slate-900 text-white px-4 py-3 rounded-xl shadow-2xl z-50 flex items-center space-x-3 text-sm border border-slate-700 animate-bounce">
+                            <i className="fa-solid fa-circle-check text-orange-400 text-lg"></i>
+                            <span>{toastMessage}</span>
+                        </div>
+                    )}
+
+                    {/* Main Content Area */}
+                    <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 flex-grow w-full">
+                        
+                        {/* TAB 1: DASHBOARD & SERVIS */}
+                        {activeTab === 'dashboard' && (
+                            <div className="space-y-6">
+                                {/* Summary Metric Cards */}
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                    <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+                                        <span className="text-slate-400 text-[11px] font-bold uppercase tracking-wider block">Kas Masuk (Lunas/DP)</span>
+                                        <p className="text-lg sm:text-xl font-extrabold text-emerald-600 mt-1">{formatRupiah(metrics.totalIncomeCashIn)}</p>
+                                    </div>
+                                    <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+                                        <span className="text-slate-400 text-[11px] font-bold uppercase tracking-wider block">Piutang (Sisa Tagihan)</span>
+                                        <p className="text-lg sm:text-xl font-extrabold text-rose-600 mt-1">{formatRupiah(metrics.totalReceivables)}</p>
+                                    </div>
+                                    <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+                                        <span className="text-slate-400 text-[11px] font-bold uppercase tracking-wider block">Laba Bersih Tersedia</span>
+                                        <p className="text-lg sm:text-xl font-extrabold text-orange-600 mt-1">{formatRupiah(metrics.netProfit)}</p>
+                                    </div>
+                                    <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+                                        <span className="text-slate-400 text-[11px] font-bold uppercase tracking-wider block">Total Unit Servis</span>
+                                        <p className="text-lg sm:text-xl font-extrabold text-slate-800 mt-1">{filteredTransactions.length} Unit</p>
+                                    </div>
+                                </div>
+
+                                {/* Filters & Search Toolbar */}
+                                <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-3">
+                                    <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                                        {/* Search Input */}
+                                        <div className="md:col-span-2 relative">
+                                            <i className="fa-solid fa-magnifying-glass absolute left-3.5 top-3.5 text-slate-400 text-sm"></i>
+                                            <input 
+                                                type="text" 
+                                                value={searchQuery}
+                                                onChange={(e) => setSearchQuery(e.target.value)}
+                                                placeholder="Cari ID, Nama Pelanggan, WA, Unit..."
+                                                className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
+                                            />
+                                        </div>
+
+                                        {/* Month Select Filter */}
+                                        <div>
+                                            <input 
+                                                type="month"
+                                                value={selectedMonth}
+                                                onChange={(e) => setSelectedMonth(e.target.value)}
+                                                className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
+                                            />
+                                        </div>
+
+                                        {/* Reset Filter Button */}
+                                        <div>
+                                            <button 
+                                                onClick={() => {
+                                                    setSearchQuery('');
+                                                    setDateFilterStart('');
+                                                    setDateFilterEnd('');
+                                                    setSelectedMonth('');
+                                                }}
+                                                className="w-full py-2.5 px-3 bg-slate-100 text-slate-600 rounded-xl font-bold text-xs hover:bg-slate-200 transition-all flex items-center justify-center space-x-1"
+                                            >
+                                                <i className="fa-solid fa-arrow-rotate-left"></i>
+                                                <span>Reset Filter</span>
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    {/* Date Range Filters */}
+                                    <div className="flex flex-col sm:flex-row items-center space-y-2 sm:space-y-0 sm:space-x-3 pt-2 border-t border-slate-100">
+                                        <span className="text-xs font-bold text-slate-500">Rentang Tanggal Masuk:</span>
+                                        <input 
+                                            type="date"
+                                            value={dateFilterStart}
+                                            onChange={(e) => setDateFilterStart(e.target.value)}
+                                            className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs"
+                                        />
+                                        <span className="text-xs text-slate-400">s/d</span>
+                                        <input 
+                                            type="date"
+                                            value={dateFilterEnd}
+                                            onChange={(e) => setDateFilterEnd(e.target.value)}
+                                            className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs"
+                                        />
+                                    </div>
+                                </div>
+
+                                {/* Main Transactions Table */}
+                                <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                                    <div className="overflow-x-auto">
+                                        <table className="w-full text-left text-xs sm:text-sm text-slate-600">
+                                            <thead className="bg-slate-50 border-b border-slate-200 text-slate-700 font-bold uppercase text-[11px] tracking-wider">
+                                                <tr>
+                                                    <th className="py-3.5 px-4">ID / Tanggal</th>
+                                                    <th className="py-3.5 px-4">Cabang & Kasir</th>
+                                                    <th className="py-3.5 px-4">Pelanggan</th>
+                                                    <th className="py-3.5 px-4">Detail Barang</th>
+                                                    <th className="py-3.5 px-4">Biaya & Bayar</th>
+                                                    <th className="py-3.5 px-4">Biaya Sparepart</th>
+                                                    <th className="py-3.5 px-4">Biaya Teknisi</th>
+                                                    <th className="py-3.5 px-4">Status & Teknisi</th>
+                                                    <th className="py-3.5 px-4">Unit Ambil</th>
+                                                    <th className="py-3.5 px-4 text-center">Aksi</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-slate-100">
+                                                {filteredTransactions.length === 0 ? (
+                                                    <tr>
+                                                        <td colSpan="10" className="py-8 text-center text-slate-400">
+                                                            <i className="fa-solid fa-folder-open text-3xl mb-2 block"></i>
+                                                            <span>Tidak ada data transaksi service yang cocok.</span>
+                                                        </td>
+                                                    </tr>
+                                                ) : (
+                                                    filteredTransactions.map(tx => {
+                                                        const finalPrice = tx.fixPrice !== null ? tx.fixPrice : tx.costEstimate;
+                                                        const paid = tx.paidAmount || 0;
+                                                        const isLunas = paid >= finalPrice && finalPrice > 0;
+                                                        const isPartial = paid > 0 && paid < finalPrice;
+
+                                                        return (
+                                                            <tr key={tx.id} className="hover:bg-slate-50/80 transition-all">
+                                                                <td className="py-3.5 px-4">
+                                                                    <span className="font-extrabold text-orange-600 block">{tx.id}</span>
+                                                                    <span className="text-[11px] text-slate-400">{tx.entryDate}</span>
+                                                                </td>
+                                                                <td className="py-3.5 px-4">
+                                                                    <span className="font-semibold text-slate-800 block">Cb. {tx.storeLocation}</span>
+                                                                    <span className="text-[11px] text-slate-400">{tx.employeeName}</span>
+                                                                </td>
+                                                                <td className="py-3.5 px-4">
+                                                                    <span className="font-bold text-slate-800 block">{tx.customerName}</span>
+                                                                    <span className="text-[11px] text-slate-400">{tx.customerWA}</span>
+                                                                </td>
+                                                                <td className="py-3.5 px-4">
+                                                                    <span className="font-semibold text-slate-800 block">{tx.itemType}</span>
+                                                                    <span className="text-[11px] text-slate-400">SN: {tx.serialNumber || '-'}</span>
+                                                                </td>
+                                                                <td className="py-3.5 px-4">
+                                                                    <span className="font-extrabold text-slate-800 block">{formatRupiah(finalPrice)}</span>
+                                                                    {isLunas ? (
+                                                                        <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-emerald-100 text-emerald-700 inline-block">LUNAS</span>
+                                                                    ) : isPartial ? (
+                                                                        <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-amber-100 text-amber-700 inline-block">
+                                                                            DP: {formatRupiah(paid)}
+                                                                        </span>
+                                                                    ) : (
+                                                                        <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-rose-100 text-rose-700 inline-block">BELUM BAYAR</span>
+                                                                    )}
+                                                                </td>
+                                                                <td className="py-3.5 px-4">
+                                                                    <span className="font-bold text-slate-800 block">{formatRupiah(tx.sparepartCost || 0)}</span>
+                                                                    {tx.sparepartPaid ? (
+                                                                        <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-emerald-100 text-emerald-700 inline-flex items-center space-x-1">
+                                                                            <i className="fa-solid fa-check text-[9px]"></i>
+                                                                            <span>Sudah Keluar</span>
+                                                                        </span>
+                                                                    ) : (
+                                                                        <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-slate-100 text-slate-500 inline-flex items-center space-x-1">
+                                                                            <i className="fa-solid fa-clock text-[9px]"></i>
+                                                                            <span>Belum Keluar</span>
+                                                                        </span>
+                                                                    )}
+                                                                </td>
+                                                                <td className="py-3.5 px-4">
+                                                                    <span className="font-bold text-slate-800 block">{formatRupiah(tx.technicianCost || 0)}</span>
+                                                                    {tx.technicianPaid ? (
+                                                                        <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-emerald-100 text-emerald-700 inline-flex items-center space-x-1">
+                                                                            <i className="fa-solid fa-check text-[9px]"></i>
+                                                                            <span>Sudah Keluar</span>
+                                                                        </span>
+                                                                    ) : (
+                                                                        <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-slate-100 text-slate-500 inline-flex items-center space-x-1">
+                                                                            <i className="fa-solid fa-clock text-[9px]"></i>
+                                                                            <span>Belum Keluar</span>
+                                                                        </span>
+                                                                    )}
+                                                                </td>
+                                                                <td className="py-3.5 px-4 space-y-1">
+                                                                    <span className={`px-2.5 py-1 rounded-full text-[11px] font-extrabold inline-block ${getStatusBadge(tx.status)}`}>
+                                                                        {tx.status}
+                                                                    </span>
+                                                                    {tx.assignedTechnician && (
+                                                                        <span className="text-[10px] font-semibold text-slate-700 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded flex items-center space-x-1 w-max">
+                                                                            <i className="fa-solid fa-user-gear text-orange-600"></i>
+                                                                            <span>{tx.assignedTechnician}</span>
+                                                                        </span>
+                                                                    )}
+                                                                    {(tx.status === 'Done' || tx.status === 'Cancel') && tx.completionDate && (
+                                                                        <span className="text-[10px] text-slate-500 block font-medium">
+                                                                            Tgl: {tx.completionDate}
+                                                                        </span>
+                                                                    )}
+                                                                </td>
+                                                                <td className="py-3.5 px-4">
+                                                                    <button
+                                                                        onClick={() => togglePickup(tx.id)}
+                                                                        className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all flex items-center space-x-1 ${tx.pickedUp ? 'bg-emerald-500 text-white' : 'bg-slate-200 text-slate-600 hover:bg-slate-300'}`}
+                                                                    >
+                                                                        <i className={`fa-solid ${tx.pickedUp ? 'fa-circle-check' : 'fa-clock'}`}></i>
+                                                                        <span>{tx.pickedUp ? 'Sudah Diambil' : 'Belum Diambil'}</span>
+                                                                    </button>
+                                                                </td>
+                                                                <td className="py-3.5 px-4 text-center">
+                                                                    <div className="flex items-center justify-center space-x-1.5">
+                                                                        {/* Eye Icon: Detail, Timeline, Technician & Notes */}
+                                                                        <button 
+                                                                            onClick={() => setDetailModalTx(tx)}
+                                                                            title="Detail & Notes"
+                                                                            className="p-2 text-slate-500 hover:text-orange-600 hover:bg-orange-50 rounded-lg transition-all"
+                                                                        >
+                                                                            <i className="fa-solid fa-eye"></i>
+                                                                        </button>
+
+                                                                        {/* Money Icon: Fix Price & Payment */}
+                                                                        <button 
+                                                                            onClick={() => setPriceModalTx(tx)}
+                                                                            title="Kelola Biaya & Pembayaran"
+                                                                            className="p-2 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-all"
+                                                                        >
+                                                                            <i className="fa-solid fa-calculator"></i>
+                                                                        </button>
+
+                                                                        {/* Receipt Icon: Invoice */}
+                                                                        <button 
+                                                                            onClick={() => setInvoiceModalTx(tx)}
+                                                                            title="Cetak / Kirim Invoice"
+                                                                            className="p-2 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all"
+                                                                        >
+                                                                            <i className="fa-solid fa-file-invoice-dollar"></i>
+                                                                        </button>
+                                                                    </div>
+                                                                </td>
+                                                            </tr>
+                                                        );
+                                                    })
+                                                )}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* TAB 2: FORM INPUT SERVIS BARU */}
+                        {activeTab === 'input' && (
+                            <div className="max-w-3xl mx-auto bg-white p-6 sm:p-8 rounded-2xl border border-slate-200 shadow-sm">
+                                <div className="border-b border-slate-100 pb-4 mb-6">
+                                    <h2 className="text-lg font-extrabold text-slate-800 flex items-center space-x-2">
+                                        <i className="fa-solid fa-file-signature text-orange-600"></i>
+                                        <span>Formulir Penerimaan Servis Kamera Baru</span>
+                                    </h2>
+                                    <p className="text-xs text-slate-400 mt-1">Masukkan data lengkap pelanggan dan kondisi unit kamera yang masuk.</p>
+                                </div>
+
+                                <form onSubmit={handleFormSubmit} className="space-y-4">
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-700 mb-1">Nama Karyawan / Penerima *</label>
+                                            <input 
+                                                type="text" 
+                                                required
+                                                value={formData.employeeName}
+                                                onChange={(e) => setFormData({...formData, employeeName: e.target.value})}
+                                                placeholder="Contoh: Budi Kurnia"
+                                                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm focus:ring-2 focus:ring-orange-500 focus:outline-none"
+                                            />
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-700 mb-1">Lokasi Service Cabang *</label>
+                                            <select 
+                                                value={formData.storeLocation}
+                                                onChange={(e) => setFormData({...formData, storeLocation: e.target.value})}
+                                                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm focus:ring-2 focus:ring-orange-500 focus:outline-none"
+                                            >
+                                                {STORES.map(s => (
+                                                    <option key={s} value={s}>Cabang {s}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-700 mb-1">Tgl Item Masuk *</label>
+                                            <input 
+                                                type="date" 
+                                                required
+                                                value={formData.entryDate}
+                                                onChange={(e) => setFormData({...formData, entryDate: e.target.value})}
+                                                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm focus:ring-2 focus:ring-orange-500 focus:outline-none"
+                                            />
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-700 mb-1">Nama Pelanggan *</label>
+                                            <input 
+                                                type="text" 
+                                                required
+                                                value={formData.customerName}
+                                                onChange={(e) => setFormData({...formData, customerName: e.target.value})}
+                                                placeholder="Nama Customer"
+                                                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm focus:ring-2 focus:ring-orange-500 focus:outline-none"
+                                            />
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-700 mb-1">No WhatsApp Customer *</label>
+                                            <input 
+                                                type="text" 
+                                                required
+                                                value={formData.customerWA}
+                                                onChange={(e) => setFormData({...formData, customerWA: e.target.value})}
+                                                placeholder="0812xxxxxxx"
+                                                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm focus:ring-2 focus:ring-orange-500 focus:outline-none"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-700 mb-1">Tipe / Merk Barang *</label>
+                                            <input 
+                                                type="text" 
+                                                required
+                                                value={formData.itemType}
+                                                onChange={(e) => setFormData({...formData, itemType: e.target.value})}
+                                                placeholder="Contoh: Sony A7 mark III"
+                                                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm focus:ring-2 focus:ring-orange-500 focus:outline-none"
+                                            />
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-700 mb-1">No Seri (Serial Number)</label>
+                                            <input 
+                                                type="text" 
+                                                value={formData.serialNumber}
+                                                onChange={(e) => setFormData({...formData, serialNumber: e.target.value})}
+                                                placeholder="Nomor Seri Unit"
+                                                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm focus:ring-2 focus:ring-orange-500 focus:outline-none"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-700 mb-1">Kelengkapan Barang</label>
+                                        <input 
+                                            type="text" 
+                                            value={formData.accessories}
+                                            onChange={(e) => setFormData({...formData, accessories: e.target.value})}
+                                            placeholder="Baterai, Strap, Memory, Charger, Box, dll."
+                                            className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm focus:ring-2 focus:ring-orange-500 focus:outline-none"
+                                        />
+                                    </div>
+
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-700 mb-1">Deskripsi Kerusakan *</label>
+                                        <textarea 
+                                            required
+                                            rows="3"
+                                            value={formData.damage}
+                                            onChange={(e) => setFormData({...formData, damage: e.target.value})}
+                                            placeholder="Jelaskan detail kerusakan unit saat awal dicek..."
+                                            className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm focus:ring-2 focus:ring-orange-500 focus:outline-none"
+                                        ></textarea>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-700 mb-1">Estimasi Biaya Awal (Rp)</label>
+                                            <input 
+                                                type="number" 
+                                                value={formData.costEstimate}
+                                                onChange={(e) => setFormData({...formData, costEstimate: e.target.value})}
+                                                placeholder="0"
+                                                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm focus:ring-2 focus:ring-orange-500 focus:outline-none"
+                                            />
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-700 mb-1">Estimasi Waktu Pengerjaan</label>
+                                            <input 
+                                                type="text" 
+                                                value={formData.estimatedDays}
+                                                onChange={(e) => setFormData({...formData, estimatedDays: e.target.value})}
+                                                placeholder="Contoh: 3-5 Hari Kerja"
+                                                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm focus:ring-2 focus:ring-orange-500 focus:outline-none"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <div className="pt-4">
+                                        <button 
+                                            type="submit"
+                                            className="w-full py-3.5 bg-orange-600 text-white font-extrabold rounded-xl shadow-lg hover:bg-orange-700 transition-all flex items-center justify-center space-x-2 text-sm"
+                                        >
+                                            <i className="fa-solid fa-paper-plane"></i>
+                                            <span>Simpan Data Transaksi Servis</span>
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                        )}
+
+                        {/* TAB 3: LAPORAN KEUANGAN & PENARIKAN LABA */}
+                        {activeTab === 'finance' && (
+                            !isFinanceUnlocked ? (
+                                <div className="max-w-md mx-auto bg-white p-6 sm:p-8 rounded-2xl border border-slate-200 shadow-sm text-center space-y-4 my-8">
+                                    <div className="w-14 h-14 bg-orange-100 text-orange-600 rounded-full flex items-center justify-center mx-auto text-2xl shadow-inner">
+                                        <i className="fa-solid fa-lock"></i>
+                                    </div>
+                                    <div>
+                                        <h2 className="text-lg font-extrabold text-slate-800">Akses Terkunci</h2>
+                                        <p className="text-xs text-slate-500 mt-1">Masukkan PIN 6 Digit untuk membuka Laporan Keuangan.</p>
+                                    </div>
+
+                                    <form onSubmit={(e) => {
+                                        e.preventDefault();
+                                        if (tabPinInput === '231018') {
+                                            setIsFinanceUnlocked(true);
+                                            setTabPinError('');
+                                        } else {
+                                            setTabPinError('PIN Keamanan Salah!');
+                                        }
+                                    }} className="space-y-3">
+                                        <input 
+                                            type="password"
+                                            maxLength="6"
+                                            value={tabPinInput}
+                                            onChange={(e) => setTabPinInput(e.target.value)}
+                                            placeholder="Masukkan PIN"
+                                            className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-center text-xl font-extrabold tracking-widest focus:ring-2 focus:ring-orange-500 focus:outline-none"
+                                        />
+                                        {tabPinError && <p className="text-xs text-rose-600 font-bold">{tabPinError}</p>}
+
+                                        <button 
+                                            type="submit"
+                                            className="w-full py-3 bg-orange-600 text-white font-extrabold rounded-xl text-xs hover:bg-orange-700 shadow-md transition-all"
+                                        >
+                                            Buka Laporan Keuangan
+                                        </button>
+                                    </form>
+                                </div>
+                            ) : (
+                                <div className="space-y-6">
+                                    <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row justify-between items-center gap-4">
+                                        <div>
+                                            <h2 className="text-xl font-extrabold text-slate-800">Laporan Keuangan Service</h2>
+                                            <p className="text-xs text-slate-400 mt-1">Rincian pendapatan kas masuk, biaya pengeluaran sparepart & teknisi, serta laba bersih.</p>
+                                        </div>
+                                        <div className="flex space-x-2">
+                                            <button
+                                                onClick={() => setIsFinanceUnlocked(false)}
+                                                className="py-3 px-4 bg-slate-100 text-slate-600 font-bold rounded-xl text-xs hover:bg-slate-200 transition-all flex items-center space-x-1"
+                                                title="Kunci Kembali"
+                                            >
+                                                <i className="fa-solid fa-lock"></i>
+                                                <span>Kunci Tab</span>
+                                            </button>
+                                            <button
+                                                onClick={() => setPinModalOpen(true)}
+                                                className="py-3 px-5 bg-gradient-to-r from-orange-600 to-amber-600 text-white font-extrabold rounded-xl shadow-md hover:from-orange-700 hover:to-amber-700 transition-all flex items-center space-x-2 text-xs sm:text-sm"
+                                            >
+                                                <i className="fa-solid fa-hand-holding-dollar"></i>
+                                                <span>Tarik Laba Bersih</span>
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    {/* Financial Summary Grid */}
+                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                        <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-2xl">
+                                            <span className="text-emerald-700 text-[10px] uppercase font-bold tracking-wider block">Kas Masuk (Lunas/DP)</span>
+                                            <span className="text-lg sm:text-2xl font-extrabold text-emerald-800 block mt-1">{formatRupiah(metrics.totalIncomeCashIn)}</span>
+                                        </div>
+                                        <div className="bg-rose-50 border border-rose-200 p-4 rounded-2xl">
+                                            <span className="text-rose-700 text-[10px] uppercase font-bold tracking-wider block">Biaya Sparepart Keluar</span>
+                                            <span className="text-lg sm:text-2xl font-extrabold text-rose-800 block mt-1">{formatRupiah(metrics.totalSparepartCost)}</span>
+                                        </div>
+                                        <div className="bg-amber-50 border border-amber-200 p-4 rounded-2xl">
+                                            <span className="text-amber-700 text-[10px] uppercase font-bold tracking-wider block">Biaya Teknisi Keluar</span>
+                                            <span className="text-lg sm:text-2xl font-extrabold text-amber-800 block mt-1">{formatRupiah(metrics.totalTechnicianCost)}</span>
+                                        </div>
+                                        <div className="bg-orange-50 border border-orange-200 p-4 rounded-2xl">
+                                            <span className="text-orange-700 text-[10px] uppercase font-bold tracking-wider block">Sisa Laba Bersih</span>
+                                            <span className="text-lg sm:text-2xl font-extrabold text-orange-800 block mt-1">{formatRupiah(metrics.netProfit)}</span>
+                                        </div>
+                                    </div>
+
+                                    {/* History of Withdrawals */}
+                                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+                                        <h3 className="font-extrabold text-slate-800 text-sm mb-4 flex items-center space-x-2">
+                                            <i className="fa-solid fa-history text-orange-600"></i>
+                                            <span>Riwayat Penarikan Laba Bersih</span>
+                                        </h3>
+                                        {withdrawals.length === 0 ? (
+                                            <p className="text-xs text-slate-400 italic">Belum ada penarikan laba bersih yang dicatat.</p>
+                                        ) : (
+                                            <div className="divide-y divide-slate-100">
+                                                {withdrawals.map(item => (
+                                                    <div key={item.id} className="py-3 flex justify-between items-center text-xs">
+                                                        <div>
+                                                            <span className="font-bold text-slate-800 block">{item.note}</span>
+                                                            <span className="text-slate-400 text-[10px]">{item.date}</span>
+                                                        </div>
+                                                        <span className="font-extrabold text-rose-600 text-sm">-{formatRupiah(item.amount)}</span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            )
+                        )}
+
+                    </main>
+
+                    {/* MODAL 1: DETAIL, PROGRESS TIMELINE & NOTES */}
+                    {detailModalTx && (
+                        <DetailModal 
+                            tx={detailModalTx}
+                            onClose={() => setDetailModalTx(null)}
+                            updateStatus={updateStatus}
+                            updateTechnician={updateTechnician}
+                            onSaveNotes={(updatedNotes) => saveNotesData(detailModalTx.id, updatedNotes)}
+                        />
+                    )}
+
+                    {/* MODAL 2: FINANCE & PAYMENT MANAGER */}
+                    {priceModalTx && (
+                        <PriceModal 
+                            tx={priceModalTx}
+                            onClose={() => setPriceModalTx(null)}
+                            onSaveFinance={(data) => saveFinanceData(priceModalTx.id, data)}
+                        />
+                    )}
+
+                    {/* MODAL 3: INVOICE */}
+                    {invoiceModalTx && (
+                        <InvoiceModal 
+                            tx={invoiceModalTx}
+                            onClose={() => setInvoiceModalTx(null)}
+                        />
+                    )}
+
+                    {/* MODAL 4: WITHDRAWAL WITH PIN SECURITY */}
+                    {pinModalOpen && (
+                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                            <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl space-y-4">
+                                <div className="text-center">
+                                    <div className="w-12 h-12 bg-orange-100 text-orange-600 rounded-full flex items-center justify-center mx-auto mb-2 text-xl">
+                                        <i className="fa-solid fa-shield-halved"></i>
+                                    </div>
+                                    <h3 className="font-extrabold text-slate-800 text-base">Penarikan Laba Bersih</h3>
+                                    <p className="text-xs text-slate-400">Masukkan PIN Keamanan untuk melanjutkan penarikan.</p>
+                                </div>
+
+                                <div className="space-y-3">
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-700 mb-1">PIN Keamanan *</label>
+                                        <input 
+                                            type="password"
+                                            value={pinInput}
+                                            onChange={(e) => setPinInput(e.target.value)}
+                                            placeholder="Masukkan PIN"
+                                            className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-center text-lg font-bold tracking-widest focus:ring-2 focus:ring-orange-500 focus:outline-none"
+                                        />
+                                    </div>
+
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-700 mb-1">Jumlah Penarikan (Rp) *</label>
+                                        <input 
+                                            type="number"
+                                            value={withdrawAmount}
+                                            onChange={(e) => setWithdrawAmount(e.target.value)}
+                                            placeholder="0"
+                                            className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:ring-2 focus:ring-orange-500 focus:outline-none"
+                                        />
+                                    </div>
+
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-700 mb-1">Keterangan Penarikan</label>
+                                        <input 
+                                            type="text"
+                                            value={withdrawNote}
+                                            onChange={(e) => setWithdrawNote(e.target.value)}
+                                            placeholder="Contoh: Ambil profit bulan ini"
+                                            className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:ring-2 focus:ring-orange-500 focus:outline-none"
+                                        />
+                                    </div>
+                                </div>
+
+                                <div className="flex space-x-2 pt-2">
+                                    <button
+                                        onClick={() => setPinModalOpen(false)}
+                                        className="w-1/2 py-2.5 bg-slate-100 text-slate-600 rounded-xl font-bold text-xs hover:bg-slate-200"
+                                    >
+                                        Batal
+                                    </button>
+                                    <button
+                                        onClick={handleWithdrawProfit}
+                                        className="w-1/2 py-2.5 bg-orange-600 text-white rounded-xl font-bold text-xs hover:bg-orange-700 shadow-md"
+                                    >
+                                        Proses Tarik
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        // Helper for status badge CSS
+        function getStatusBadge(status) {
+            switch(status) {
+                case 'On Check': return 'bg-sky-100 text-sky-800';
+                case 'Price Confirmation': return 'bg-indigo-100 text-indigo-800';
+                case 'Price Approved': return 'bg-blue-100 text-blue-800';
+                case 'Waiting Sparepart': return 'bg-amber-100 text-amber-800';
+                case 'On Progress': return 'bg-purple-100 text-purple-800';
+                case 'Done': return 'bg-emerald-100 text-emerald-800';
+                case 'Trouble': return 'bg-orange-100 text-orange-800';
+                case 'Cancel': return 'bg-rose-100 text-rose-800';
+                default: return 'bg-slate-100 text-slate-800';
+            }
+        }
+
+        // Sub-component for Detail, Progress Timeline & Notes
+        function DetailModal({ tx, onClose, updateStatus, updateTechnician, onSaveNotes }) {
+            const [newNote, setNewNote] = useState('');
+            const [notesList, setNotesList] = useState(tx.notes || []);
+
+            const handleAddNote = () => {
+                if (!newNote.trim()) return;
+                const updated = [
+                    ...notesList,
+                    {
+                        id: Date.now(),
+                        text: newNote,
+                        time: new Date().toISOString().replace('T', ' ').substring(0, 16),
+                        author: 'Tim Servis'
+                    }
+                ];
+                setNotesList(updated);
+                onSaveNotes(updated);
+                setNewNote('');
+            };
+
+            return (
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                    <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6 shadow-2xl space-y-6">
+                        <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+                            <div>
+                                <h3 className="font-extrabold text-slate-800 text-base">Detail Transaksi & Status Pengerjaan</h3>
+                                <p className="text-xs text-orange-600 font-bold">{tx.id} - Cabang {tx.storeLocation}</p>
+                            </div>
+                            <button onClick={onClose} className="text-slate-400 hover:text-slate-600 text-lg">
+                                <i className="fa-solid fa-xmark"></i>
+                            </button>
+                        </div>
+
+                        {/* Customer & Unit Info */}
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 bg-slate-50 p-4 rounded-xl border border-slate-200 text-xs">
+                            <div>
+                                <span className="text-slate-400 block font-semibold text-[10px] uppercase">Pelanggan</span>
+                                <span className="font-bold text-slate-800">{tx.customerName}</span> ({tx.customerWA})
+                            </div>
+                            <div>
+                                <span className="text-slate-400 block font-semibold text-[10px] uppercase">Tipe Barang</span>
+                                <span className="font-bold text-slate-800">{tx.itemType}</span>
+                            </div>
+                            <div>
+                                <span className="text-slate-400 block font-semibold text-[10px] uppercase">Estimasi Pengerjaan</span>
+                                <span className="font-bold text-orange-600 bg-orange-50 px-2 py-0.5 rounded border border-orange-200 inline-block mt-0.5">{tx.estimatedDays || '3-5 Hari'}</span>
+                            </div>
+                            <div>
+                                <span className="text-slate-400 block font-semibold text-[10px] uppercase">Kerusakan</span>
+                                <span className="text-slate-700">{tx.damage}</span>
+                            </div>
+                            <div className="col-span-2">
+                                <span className="text-slate-400 block font-semibold text-[10px] uppercase">Kelengkapan</span>
+                                <span className="text-slate-700">{tx.accessories || '-'}</span>
+                            </div>
+                        </div>
+
+                        {/* Assign Responsible Technician */}
+                        <div className="bg-orange-50/60 p-4 rounded-xl border border-orange-100 space-y-2">
+                            <label className="block text-xs font-bold text-slate-700">Teknisi Penanggung Jawab:</label>
+                            <select 
+                                value={tx.assignedTechnician || ''}
+                                onChange={(e) => updateTechnician(tx.id, e.target.value)}
+                                className="w-full px-3 py-2 bg-white border border-orange-200 rounded-xl text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                            >
+                                <option value="">-- Pilih Teknisi --</option>
+                                {TECHNICIANS.map(tech => (
+                                    <option key={tech} value={tech}>{tech}</option>
+                                ))}
+                            </select>
+                        </div>
+
+                        {/* Update Status Buttons */}
+                        <div>
+                            <h4 className="font-bold text-xs text-slate-700 mb-2">Ubah Status Progress:</h4>
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                                {STAGES.map(stage => {
+                                    const isCurrent = tx.status === stage;
+                                    return (
+                                        <button
+                                            key={stage}
+                                            onClick={() => updateStatus(tx.id, stage)}
+                                            className={`py-2 px-2.5 rounded-xl text-xs font-bold transition-all border ${isCurrent ? 'bg-orange-600 text-white border-orange-600 shadow-md' : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'}`}
+                                        >
+                                            {stage}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+
+                        {/* Progress Timeline */}
+                        <div>
+                            <h4 className="font-bold text-xs text-slate-700 mb-3">Riwayat Tanggal Progress:</h4>
+                            <div className="space-y-2">
+                                {STAGES.map(stage => {
+                                    const timestamp = tx.statusHistory ? tx.statusHistory[stage] : null;
+                                    return (
+                                        <div key={stage} className="flex justify-between items-center text-xs py-1.5 px-3 bg-slate-50 rounded-lg border border-slate-100">
+                                            <span className="font-semibold text-slate-700">{stage}</span>
+                                            {timestamp ? (
+                                                <span className="font-bold text-emerald-600 flex items-center space-x-1 text-[11px]">
+                                                    <i className="fa-solid fa-check-circle"></i>
+                                                    <span>{timestamp}</span>
+                                                </span>
+                                            ) : (
+                                                <span className="text-slate-400 text-[11px] italic">Belum dilewati</span>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+
+                        {/* Notes Section */}
+                        <div className="border-t border-slate-100 pt-4 space-y-3">
+                            <h4 className="font-bold text-xs text-slate-700 flex items-center space-x-1">
+                                <i className="fa-solid fa-sticky-note text-amber-500"></i>
+                                <span>Catatan Internal Servis</span>
+                            </h4>
+
+                            <div className="space-y-2 max-h-40 overflow-y-auto">
+                                {notesList.length === 0 ? (
+                                    <p className="text-xs text-slate-400 italic">Belum ada catatan penanganan.</p>
+                                ) : (
+                                    notesList.map(n => (
+                                        <div key={n.id} className="bg-amber-50/70 p-3 rounded-xl border border-amber-100 text-xs">
+                                            <p className="text-slate-800 font-medium">{n.text}</p>
+                                            <div className="flex justify-between text-[10px] text-amber-800/60 mt-1 font-semibold">
+                                                <span>Oleh: {n.author}</span>
+                                                <span>{n.time}</span>
+                                            </div>
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+
+                            <div className="flex space-x-2">
+                                <input 
+                                    type="text" 
+                                    value={newNote}
+                                    onChange={(e) => setNewNote(e.target.value)}
+                                    placeholder="Tambah catatan servis baru..."
+                                    className="flex-grow px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-orange-500 focus:outline-none"
+                                />
+                                <button
+                                    onClick={handleAddNote}
+                                    className="px-4 py-2 bg-slate-800 text-white rounded-xl text-xs font-bold hover:bg-slate-900 transition-all"
+                                >
+                                    Tambah
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="pt-2">
+                            <button onClick={onClose} className="w-full py-2.5 bg-slate-100 text-slate-600 rounded-xl font-bold text-xs hover:bg-slate-200">
+                                Tutup
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // Sub-component for Price & Payment Manager
+        function PriceModal({ tx, onClose, onSaveFinance }) {
+            const [fixPrice, setFixPrice] = useState(tx.fixPrice !== null ? tx.fixPrice : tx.costEstimate || '');
+            const [sparepartCost, setSparepartCost] = useState(tx.sparepartCost || '');
+            const [sparepartPaid, setSparepartPaid] = useState(tx.sparepartPaid || false);
+            const [technicianCost, setTechnicianCost] = useState(tx.technicianCost || '');
+            const [technicianPaid, setTechnicianPaid] = useState(tx.technicianPaid || false);
+            
+            const [paymentType, setPaymentType] = useState(tx.paymentType || 'UNPAID');
+            const [paidAmount, setPaidAmount] = useState(tx.paidAmount || 0);
+            const [paymentMethod, setPaymentMethod] = useState(tx.paymentMethod || 'Tunai / Cash');
+            const [paymentNote, setPaymentNote] = useState(tx.paymentNote || '');
+
+            const calculatedFinalPrice = Number(fixPrice) || 0;
+            const remainingBalance = Math.max(0, calculatedFinalPrice - (Number(paidAmount) || 0));
+
+            const handleSave = () => {
+                const isPaidFull = paymentType === 'FULL' || (paymentType === 'DP' && remainingBalance === 0);
+                onSaveFinance({
+                    fixPrice: Number(fixPrice) || 0,
+                    sparepartCost: Number(sparepartCost) || 0,
+                    sparepartPaid,
+                    technicianCost: Number(technicianCost) || 0,
+                    technicianPaid,
+                    isPaid: isPaidFull,
+                    paymentType,
+                    paidAmount: paymentType === 'UNPAID' ? 0 : (paymentType === 'FULL' ? calculatedFinalPrice : Number(paidAmount) || 0),
+                    paymentMethod,
+                    paymentNote
+                });
+            };
+
+            return (
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                    <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+                        <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+                            <div>
+                                <h3 className="font-extrabold text-slate-800 text-base">Keloka Harga, Biaya & Pembayaran</h3>
+                                <p className="text-xs text-orange-600 font-bold">{tx.id}</p>
+                            </div>
+                            <button onClick={onClose} className="text-slate-400 hover:text-slate-600 text-lg">
+                                <i className="fa-solid fa-xmark"></i>
+                            </button>
+                        </div>
+
+                        <div className="space-y-3">
+                            {/* Final Fix Price */}
+                            <div>
+                                <label className="block text-xs font-bold text-slate-700 mb-1">Harga Fix Service (Final Rp) *</label>
+                                <input 
+                                    type="number" 
+                                    value={fixPrice}
+                                    onChange={(e) => setFixPrice(e.target.value)}
+                                    placeholder="Contoh: 500000"
+                                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm font-extrabold text-slate-800 focus:ring-2 focus:ring-orange-500 focus:outline-none"
+                                />
+                                <span className="text-[10px] text-slate-400">Harga ini akan menjadi harga final pada Invoice.</span>
+                            </div>
+
+                            {/* Expenses: Sparepart & Technician */}
+                            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-700 mb-1">Biaya Sparepart (Rp)</label>
+                                    <div className="flex items-center space-x-2">
+                                        <input 
+                                            type="number" 
+                                            disabled={tx.sparepartPaid}
+                                            value={sparepartCost}
+                                            onChange={(e) => setSparepartCost(e.target.value)}
+                                            placeholder="0"
+                                            className={`flex-grow px-3 py-2 border rounded-xl text-xs focus:ring-2 focus:ring-orange-500 focus:outline-none ${tx.sparepartPaid ? 'bg-slate-200 border-slate-300 text-slate-500 cursor-not-allowed' : 'bg-white border-slate-200'}`}
+                                        />
+                                        <label className={`flex items-center space-x-1 text-[11px] font-bold px-2 py-2 rounded-xl border ${tx.sparepartPaid ? 'bg-emerald-100 border-emerald-300 text-emerald-800 cursor-not-allowed' : 'bg-white border-slate-200 cursor-pointer'}`}>
+                                            <input 
+                                                type="checkbox" 
+                                                disabled={tx.sparepartPaid}
+                                                checked={sparepartPaid}
+                                                onChange={(e) => setSparepartPaid(e.target.checked)}
+                                                className="accent-emerald-600 rounded"
+                                            />
+                                            <span>Sudah Keluar</span>
+                                        </label>
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-700 mb-1">Biaya Teknisi (Rp)</label>
+                                    <div className="flex items-center space-x-2">
+                                        <input 
+                                            type="number" 
+                                            disabled={tx.technicianPaid}
+                                            value={technicianCost}
+                                            onChange={(e) => setTechnicianCost(e.target.value)}
+                                            placeholder="0"
+                                            className={`flex-grow px-3 py-2 border rounded-xl text-xs focus:ring-2 focus:ring-orange-500 focus:outline-none ${tx.technicianPaid ? 'bg-slate-200 border-slate-300 text-slate-500 cursor-not-allowed' : 'bg-white border-slate-200'}`}
+                                        />
+                                        <label className={`flex items-center space-x-1 text-[11px] font-bold px-2 py-2 rounded-xl border ${tx.technicianPaid ? 'bg-emerald-100 border-emerald-300 text-emerald-800 cursor-not-allowed' : 'bg-white border-slate-200 cursor-pointer'}`}>
+                                            <input 
+                                                type="checkbox" 
+                                                disabled={tx.technicianPaid}
+                                                checked={technicianPaid}
+                                                onChange={(e) => setTechnicianPaid(e.target.checked)}
+                                                className="accent-emerald-600 rounded"
+                                            />
+                                            <span>Sudah Keluar</span>
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Payment Section */}
+                            <div className="p-3 bg-emerald-50/60 rounded-xl border border-emerald-100 space-y-3">
+                                <h4 className="font-bold text-xs text-emerald-900 flex items-center space-x-1">
+                                    <i className="fa-solid fa-money-check-dollar text-emerald-600"></i>
+                                    <span>Status & Metode Pembayaran</span>
+                                </h4>
+
+                                <div>
+                                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Status Pembayaran</label>
+                                    <div className="grid grid-cols-3 gap-1.5">
+                                        <button
+                                            type="button"
+                                            onClick={() => { setPaymentType('UNPAID'); setPaidAmount(0); }}
+                                            className={`py-1.5 px-2 rounded-lg text-xs font-bold border ${paymentType === 'UNPAID' ? 'bg-rose-600 text-white border-rose-600' : 'bg-white text-slate-700 border-slate-200'}`}
+                                        >
+                                            Belum Bayar
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => { setPaymentType('DP'); setPaidAmount(paidAmount || 100000); }}
+                                            className={`py-1.5 px-2 rounded-lg text-xs font-bold border ${paymentType === 'DP' ? 'bg-amber-500 text-white border-amber-500' : 'bg-white text-slate-700 border-slate-200'}`}
+                                        >
+                                            Bayar DP
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => { setPaymentType('FULL'); setPaidAmount(calculatedFinalPrice); }}
+                                            className={`py-1.5 px-2 rounded-lg text-xs font-bold border ${paymentType === 'FULL' ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-slate-700 border-slate-200'}`}
+                                        >
+                                            LUNAS (Full)
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {paymentType === 'DP' && (
+                                    <div className="bg-white p-2.5 rounded-lg border border-amber-200 space-y-2">
+                                        <div>
+                                            <label className="block text-[10px] font-bold text-slate-700 mb-0.5">Jumlah DP yang Dibayar (Rp)</label>
+                                            <input 
+                                                type="number"
+                                                value={paidAmount}
+                                                onChange={(e) => setPaidAmount(e.target.value)}
+                                                className="w-full px-3 py-1.5 bg-amber-50/50 border border-amber-200 rounded-lg text-xs font-extrabold text-amber-900 focus:outline-none"
+                                            />
+                                        </div>
+                                        <div className="flex justify-between text-[11px] font-bold text-slate-600 pt-1 border-t border-slate-100">
+                                            <span>Sisa Tagihan:</span>
+                                            <span className="text-rose-600 font-extrabold">{formatRupiah(remainingBalance)}</span>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {paymentType !== 'UNPAID' && (
+                                    <>
+                                        <div>
+                                            <label className="block text-[11px] font-bold text-slate-700 mb-1">Metode Pembayaran</label>
+                                            <select
+                                                value={paymentMethod}
+                                                onChange={(e) => setPaymentMethod(e.target.value)}
+                                                className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-emerald-500 focus:outline-none font-semibold text-slate-700"
+                                            >
+                                                {PAYMENT_METHODS.map(m => (
+                                                    <option key={m} value={m}>{m}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-[11px] font-bold text-slate-700 mb-1">Catatan Pembayaran</label>
+                                            <input 
+                                                type="text"
+                                                value={paymentNote}
+                                                onChange={(e) => setPaymentNote(e.target.value)}
+                                                placeholder="Contoh: Transfer via BCA a.n. Siti"
+                                                className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-emerald-500 focus:outline-none text-slate-700"
+                                            />
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="flex space-x-2 pt-3 border-t border-slate-100">
+                            <button
+                                onClick={onClose}
+                                className="w-1/2 py-2.5 bg-slate-100 text-slate-600 rounded-xl font-bold text-xs hover:bg-slate-200"
+                            >
+                                Batal
+                            </button>
+                            <button
+                                onClick={handleSave}
+                                className="w-1/2 py-2.5 bg-orange-600 text-white rounded-xl font-bold text-xs hover:bg-orange-700 shadow-md"
+                            >
+                                Simpan Perubahan
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // Sub-component for Invoice Preview & WhatsApp Sender
+        function InvoiceModal({ tx, onClose }) {
+            const finalPrice = tx.fixPrice !== null ? tx.fixPrice : tx.costEstimate;
+            const paid = tx.paidAmount || 0;
+            const isLunas = paid >= finalPrice && finalPrice > 0;
+            const isPartial = paid > 0 && paid < finalPrice;
+            const remainingBalance = Math.max(0, finalPrice - paid);
+            const branchPhone = BRANCH_PHONES[tx.storeLocation] || '089670897089';
+
+            // Print Function
+            const handlePrint = () => {
+                window.print();
+            };
+
+            // Send via WhatsApp Function
+            const handleSendWA = () => {
+                let statusText = isLunas ? 'LUNAS' : (isPartial ? `DP (Sisa Tagihan: ${formatRupiah(remainingBalance)})` : 'BELUM LUNAS');
+                const text = `*INVOICE SERVICE - NUSA KAMERA SERVICE*\n` +
+                             `----------------------------------------\n` +
+                             `*No Invoice:* ${tx.id}\n` +
+                             `*Cabang:* ${tx.storeLocation} (${branchPhone})\n` +
+                             `*Kasir:* ${tx.employeeName}\n` +
+                             `*Tgl Masuk:* ${tx.entryDate}\n` +
+                             `*Tgl Selesai:* ${tx.completionDate || '-'}\n` +
+                             `----------------------------------------\n` +
+                             `*Pelanggan:* ${tx.customerName}\n` +
+                             `*No WA:* ${tx.customerWA}\n` +
+                             `*Barang:* ${tx.itemType}\n` +
+                             `*Kelengkapan:* ${tx.accessories || '-'}\n` +
+                             `*Kerusakan:* ${tx.damage}\n` +
+                             `----------------------------------------\n` +
+                             `*Total Biaya Service:* ${formatRupiah(finalPrice)}\n` +
+                             `*Jumlah Dibayar:* ${formatRupiah(paid)}\n` +
+                             `*Status Pembayaran:* ${statusText}\n` +
+                             `----------------------------------------\n` +
+                             `*Garansi Service:* 14 Hari Kerja\n\n` +
+                             `Terima kasih telah mempercayakan service kamera Anda di Nusa Kamera Service!`;
+                
+                const cleanPhone = tx.customerWA.replace(/[^0-9]/g, '');
+                const formattedPhone = cleanPhone.startsWith('0') ? '62' + cleanPhone.slice(1) : cleanPhone;
+                window.open(`https://wa.me/${formattedPhone}?text=${encodeURIComponent(text)}`, '_blank');
+            };
+
+            return (
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                    <div className="bg-white rounded-2xl max-w-xl w-full max-h-[95vh] overflow-y-auto p-6 shadow-2xl space-y-6">
+                        
+                        {/* Actions Toolbar */}
+                        <div className="flex justify-between items-center border-b border-slate-100 pb-3 no-print">
+                            <h3 className="font-extrabold text-slate-800 text-base">Pratinjau Nota Invoice</h3>
+                            <div className="flex space-x-2">
+                                <button 
+                                    onClick={handleSendWA}
+                                    className="px-3 py-1.5 bg-emerald-600 text-white rounded-xl text-xs font-bold hover:bg-emerald-700 flex items-center space-x-1 shadow-sm"
+                                >
+                                    <i className="fa-brands fa-whatsapp"></i>
+                                    <span>Kirim WA</span>
+                                </button>
+                                <button 
+                                    onClick={handlePrint}
+                                    className="px-3 py-1.5 bg-slate-800 text-white rounded-xl text-xs font-bold hover:bg-slate-900 flex items-center space-x-1 shadow-sm"
+                                >
+                                    <i className="fa-solid fa-print"></i>
+                                    <span>Cetak Nota</span>
+                                </button>
+                                <button onClick={onClose} className="text-slate-400 hover:text-slate-600 text-lg ml-2">
+                                    <i className="fa-solid fa-xmark"></i>
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Printable Invoice Area */}
+                        <div className="p-6 border border-slate-200 rounded-xl relative bg-white" id="invoice-printable">
+                            {/* Watermark / Badge Status Pembayaran */}
+                            <div className="absolute right-6 top-24 pointer-events-none opacity-20 transform rotate-12">
+                                <div className={`border-4 text-2xl font-black px-6 py-2 rounded-xl uppercase tracking-widest ${isLunas ? 'border-emerald-600 text-emerald-600' : 'border-rose-600 text-rose-600'}`}>
+                                    {isLunas ? 'LUNAS' : (isPartial ? 'SEBAGIAN' : 'BELUM LUNAS')}
+                                </div>
+                            </div>
+
+                            {/* Header Invoice */}
+                            <div className="flex justify-between items-start border-b-2 border-slate-800 pb-4">
+                                <div className="flex items-center space-x-3">
+                                    <div className="w-12 h-12 bg-orange-600 text-white rounded-xl flex items-center justify-center text-2xl font-black shadow-sm">
+                                        <i className="fa-solid fa-camera-retro"></i>
+                                    </div>
+                                    <div>
+                                        <h2 className="text-xl font-extrabold text-slate-900 tracking-tight">NUSA KAMERA SERVICE</h2>
+                                        <p className="text-[11px] text-slate-500 font-semibold">Cabang {tx.storeLocation} - Telp/WA: {branchPhone}</p>
+                                    </div>
+                                </div>
+                                <div className="text-right">
+                                    <span className="text-sm font-extrabold text-orange-600 block">{tx.id}</span>
+                                    <span className="text-[10px] text-slate-400 block font-medium">Tgl Masuk: {tx.entryDate}</span>
+                                    <span className="text-[10px] text-slate-400 block font-medium">Tgl Selesai: {tx.completionDate || '-'}</span>
+                                </div>
+                            </div>
+
+                            {/* Metadata Customer & Kasir */}
+                            <div className="grid grid-cols-2 gap-4 my-4 text-xs">
+                                <div>
+                                    <span className="text-[10px] font-bold text-slate-400 uppercase block">Ditujukan Kepada:</span>
+                                    <span className="font-extrabold text-slate-800 text-sm block">{tx.customerName}</span>
+                                    <span className="text-slate-500 font-medium">{tx.customerWA}</span>
+                                </div>
+                                <div className="text-right">
+                                    <span className="text-[10px] font-bold text-slate-400 uppercase block">Penerima / Kasir:</span>
+                                    <span className="font-bold text-slate-800 block">{tx.employeeName}</span>
+                                    <span className="text-slate-500 font-medium">Cb. {tx.storeLocation}</span>
+                                </div>
+                            </div>
+
+                            {/* Equipment & Fault Info */}
+                            <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-xs space-y-1.5 my-4">
+                                <div className="flex justify-between">
+                                    <span className="font-bold text-slate-500">Tipe / Merk Unit:</span>
+                                    <span className="font-extrabold text-slate-800">{tx.itemType}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="font-bold text-slate-500">No Seri (SN):</span>
+                                    <span className="font-semibold text-slate-700">{tx.serialNumber || '-'}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="font-bold text-slate-500">Kelengkapan:</span>
+                                    <span className="font-semibold text-slate-700">{tx.accessories || '-'}</span>
+                                </div>
+                                <div className="flex justify-between border-t border-slate-200 pt-1.5 mt-1">
+                                    <span className="font-bold text-slate-500">Deskripsi Kerusakan:</span>
+                                    <span className="font-semibold text-slate-800">{tx.damage}</span>
+                                </div>
+                            </div>
+
+                            {/* Financial Summary Table */}
+                            <table className="w-full text-xs text-left my-4 border-collapse">
+                                <thead>
+                                    <tr className="border-b border-slate-200 text-slate-400 uppercase font-bold text-[10px]">
+                                        <th className="py-2">Deskripsi Layanan</th>
+                                        <th className="py-2 text-right">Jumlah</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr className="border-b border-slate-100">
+                                        <td className="py-3 font-bold text-slate-800">
+                                            Biaya Perbaikan Service Kamera
+                                            <span className="block text-[10px] text-slate-400 font-normal">Garansi service berlaku 14 Hari sejak tanggal selesai.</span>
+                                        </td>
+                                        <td className="py-3 text-right font-extrabold text-slate-900">{formatRupiah(finalPrice)}</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+
+                            {/* Calculation Summary */}
+                            <div className="space-y-1.5 text-xs border-t border-slate-200 pt-3">
+                                <div className="flex justify-between text-slate-600 font-semibold">
+                                    <span>Total Tagihan:</span>
+                                    <span>{formatRupiah(finalPrice)}</span>
+                                </div>
+                                <div className="flex justify-between text-emerald-700 font-semibold">
+                                    <span>Jumlah Dibayar ({tx.paymentMethod || 'Cash'}):</span>
+                                    <span>{formatRupiah(paid)}</span>
+                                </div>
+                                <div className="flex justify-between text-slate-900 font-extrabold text-sm pt-1 border-t border-slate-100">
+                                    <span>Sisa Tagihan (Piutang):</span>
+                                    <span className={remainingBalance > 0 ? 'text-rose-600' : 'text-emerald-600'}>
+                                        {formatRupiah(remainingBalance)}
+                                    </span>
+                                </div>
+                            </div>
+
+                            {/* Warranty Note */}
+                            <div className="mt-6 pt-4 border-t border-dashed border-slate-300 text-center space-y-1">
+                                <div className="inline-block px-3 py-1 bg-amber-50 border border-amber-200 text-amber-900 rounded-full text-[11px] font-extrabold">
+                                    <i className="fa-solid fa-shield-halved mr-1"></i>
+                                    Garansi Service 14 Hari
+                                </div>
+                                <p className="text-[10px] text-slate-400 font-medium">Garansi tidak berlaku untuk kelalaian penggunaan (terkena air, jatuh, korsleting).</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // Render Application
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
